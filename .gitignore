@@ -1,0 +1,83 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+lib/
+lib64/
+*.manifest
+*.spec
+*.log
+*.mo
+*.pot
+pip-log.txt
+pip-delete-this-directory.txt
+htmlcov/
+.tox/
+.nox/
+.coverage*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.pytest_cache/
+.hypothesis/
+.pytype/
+.dmypy.json
+.mypy_cache/
+.pyre/
+cython_debug/
+
+# --- Environments ---
+.env
+.venv
+env/
+ENV/
+env.bak/
+venv/
+venv.bak/
+
+# --- ollama ---
+ollama_data/
+
+# --- Jupyter / IPython ---
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# --- IDEs ---
+.idea/
+.vscode/
+.spyderproject
+.spyproject
+.ropeproject
+
+# --- Docs ---
+docs/_build/
+site/
+
+# --- Django / Flask / DBs ---
+db.sqlite3
+db.sqlite3-journal
+instance/
+.webassets-cache
+local_settings.py
+
+# --- PEP 582 / Pyflow / PDM ---
+__pypackages__/
+.pdm.toml
+.pdm-python
+.pdm-build/
+
+# --- Telegraf / InfluxDB temp ---
+*.influxql
+*.flux
+
+
+# 123
