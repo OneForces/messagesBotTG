@@ -14,6 +14,8 @@ from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtWidgets import QInputDialog
 from telethon.errors import SessionPasswordNeededError
 from PyQt5.QtWidgets import QComboBox
+import base64
+from telethon.sessions import MemorySession
 import json
 import sys
 import os
@@ -25,7 +27,8 @@ import time
 import threading
 from datetime import datetime
 import csv
-
+import threading
+import asyncio
 
 
 def append_report(account, recipient, status, message):
@@ -316,37 +319,80 @@ class MainWindow(QMainWindow):
         tab.setLayout(layout)
         self.tabs.addTab(tab, "Рассылка")
 
+    # gui/main_window.py
+
+
     def load_accounts(self):
-        folder = QFileDialog.getExistingDirectory(self, "Выберите папку с .session файлами", "./sessions")
-        if not folder:
+        session_folder = QFileDialog.getExistingDirectory(self, "Выберите папку с аккаунтами (.session или .json)", "./")
+        if not session_folder:
             return
 
         self.account_list_widget.clear()
         self.accounts.clear()
 
-        session_files = [f for f in os.listdir(folder) if f.endswith(".session")]
+        def load_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-        if not session_files:
-            self.account_list_widget.addItem("❌ Нет .session файлов в выбранной папке")
-            return
+            # === .session ===
+            session_files = [f for f in os.listdir(session_folder) if f.endswith(".session")]
+            for idx, file in enumerate(session_files):
+                full_path = os.path.join(session_folder, file)
+                proxy = self.proxies[idx] if idx < len(self.proxies) else None
+                try:
+                    status = loop.run_until_complete(check_account_status(full_path, proxy=proxy))
+                    account_name = os.path.basename(full_path)
+                    display_text = f"{account_name}: {status}"
+                    self.account_list_widget.addItem(display_text)
+                    self.accounts.append({
+                        "type": "session",
+                        "path": full_path
+                    })
+                    write_log("logs/accounts.log", display_text)
+                except Exception as e:
+                    error_text = f"{file}: ❌ Ошибка: {str(e)}"
+                    self.account_list_widget.addItem(error_text)
+                    write_log("logs/errors.log", error_text)
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+            # === .json ===
+            json_files = [f for f in os.listdir(session_folder) if f.endswith(".json")]
+            for file in json_files:
+                try:
+                    with open(os.path.join(session_folder, file), "r", encoding="utf-8") as f:
+                        data = json.load(f)
 
-        for idx, file in enumerate(session_files):
-            full_path = os.path.join(folder, file)
-            proxy = self.proxies[idx] if idx < len(self.proxies) else None
-            try:
-                status = loop.run_until_complete(check_account_status(full_path, proxy=proxy))
-                account_name = os.path.basename(full_path)
-                display_text = f"{account_name}: {status}"
-                self.account_list_widget.addItem(display_text)
-                self.accounts.append(full_path)
-                write_log("logs/accounts.log", display_text)
-            except Exception as e:
-                error_text = f"{os.path.basename(full_path)}: ❌ Ошибка: {str(e)}"
-                self.account_list_widget.addItem(error_text)
-                write_log("logs/errors.log", error_text)
+                    session = MemorySession()
+                    session.set_dc(data["dc_id"], "149.154.167.50", 443)
+                    session.auth_key = base64.b64decode(data["auth_key"])
+                    session._dc_id = data["dc_id"]
+
+                    client = TelegramClient(session, data["api_id"], data["api_hash"])
+                    loop.run_until_complete(client.connect())
+
+                    if not loop.run_until_complete(client.is_user_authorized()):
+                        raise Exception("Не авторизован")
+
+                    account_name = file.replace(".json", "")
+                    display_text = f"{account_name} (json): ✅ авторизован"
+                    self.account_list_widget.addItem(display_text)
+                    self.accounts.append({
+                        "type": "json",
+                        "session": session,
+                        "api_id": data["api_id"],
+                        "api_hash": data["api_hash"],
+                        "filename": file
+                    })
+                    write_log("logs/accounts.log", display_text)
+                    loop.run_until_complete(client.disconnect())
+
+                except Exception as e:
+                    error_text = f"{file}: ❌ Ошибка JSON: {str(e)}"
+                    self.account_list_widget.addItem(error_text)
+                    write_log("logs/errors.log", error_text)
+
+        threading.Thread(target=load_thread).start()
+
+
 
 
     def load_proxies(self):
@@ -431,15 +477,24 @@ class MainWindow(QMainWindow):
         limit_min = self.msg_limit_min.value()
         limit_max = self.msg_limit_max.value()
 
-        for session_path in self.accounts:
+        for acc in self.accounts:
             if self.stop_flag:
                 break
 
             try:
-                client = TelegramClient(session_path.replace(".session", ""), API_ID, API_HASH)
+                if acc["type"] == "session":
+                    client = TelegramClient(acc["path"].replace(".session", ""), API_ID, API_HASH)
+                    session_name = os.path.basename(acc["path"])
+                else:  # JSON
+                    client = TelegramClient(
+                        acc["session"],
+                        acc["api_id"],
+                        acc["api_hash"]
+                    )
+                    session_name = acc["filename"]
+
                 client.connect()
 
-                # Проверка авторизации и 2FA
                 if not client.is_user_authorized():
                     try:
                         client.start()
@@ -447,7 +502,7 @@ class MainWindow(QMainWindow):
                         pwd, ok = QInputDialog.getText(
                             self,
                             "2FA Защита",
-                            f"Введите 2FA-пароль для аккаунта:\n{session_path}"
+                            f"Введите 2FA-пароль для аккаунта:\n{session_name}"
                         )
                         if not ok or not pwd:
                             raise Exception("2FA-пароль не введён.")
@@ -474,17 +529,19 @@ class MainWindow(QMainWindow):
                         else:
                             client.send_message(user, message)
 
-                        write_log("logs/send.log", f"{session_path} → @{username}")
-                        append_report(session_path, username, True, "OK")
+                        write_log("logs/send.log", f"{session_name} → @{username}")
+                        append_report(session_name, username, True, "OK")
                         time.sleep(random.uniform(min_delay, max_delay))
                     except Exception as e:
-                        write_log("logs/errors.log", f"{session_path} → @{username}: {str(e)}")
-                        append_report(session_path, username, False, str(e))
+                        write_log("logs/errors.log", f"{session_name} → @{username}: {str(e)}")
+                        append_report(session_name, username, False, str(e))
 
                 client.disconnect()
 
             except Exception as e:
-                write_log("logs/errors.log", f"Ошибка аккаунта {session_path}: {str(e)}")
+                write_log("logs/errors.log", f"Ошибка аккаунта {session_name}: {str(e)}")
+
+
 
 
 
