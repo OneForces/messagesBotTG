@@ -6,3 +6,4 @@ PySocks==1.7.1
 telethon==1.34.0
 pytest
 pyinstaller
+aiohttp_socks
