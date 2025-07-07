@@ -17,7 +17,8 @@ async def check_proxy(proxy: Proxy) -> Tuple[Proxy, bool]:
         proxy_url = f"socks5://{auth}{ip}:{port}"
         connector = ProxyConnector.from_url(proxy_url)
     elif proxy_type == "http":
-        proxy_url = f"http://{user}:{password}@{ip}:{port}" if user else f"http://{ip}:{port}"
+        auth = f"{user}:{password}@" if user else ""
+        proxy_url = f"http://{auth}{ip}:{port}"
         connector = TCPConnector(ssl=False)
     else:
         return proxy, False
@@ -40,7 +41,7 @@ async def check_proxies(proxies: List[Proxy]) -> List[Proxy]:
     return [proxy for proxy, is_ok in results if is_ok]
 
 
-# Пример локального запуска
+# Локальный тест
 if __name__ == "__main__":
     sample_proxies = [
         ("127.0.0.1", 8080, "", "", "http"),

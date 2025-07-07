@@ -123,7 +123,7 @@ class MainWindow(QMainWindow):
 
         tab.setLayout(layout)
         self.tabs.addTab(tab, "Лог")
-
+        
 
     def load_logs(self):
         def read_log(file_path):
@@ -314,84 +314,84 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(start_btn)
         layout.addWidget(stop_btn)
-        layout.addWidget(QLabel("Лог отправки будет отображаться здесь..."))
+
+        layout.addWidget(QLabel("Сообщение:"))
+        self.message_edit = QTextEdit()
+        layout.addWidget(self.message_edit)
+
+        self.send_log_widget = QTextEdit()
+        self.send_log_widget.setReadOnly(True)
+        self.send_log_widget.setPlaceholderText("Здесь будет отображаться лог отправки...")
+        layout.addWidget(self.send_log_widget)
 
         tab.setLayout(layout)
         self.tabs.addTab(tab, "Рассылка")
 
-    # gui/main_window.py
 
 
     def load_accounts(self):
-        session_folder = QFileDialog.getExistingDirectory(self, "Выберите папку с аккаунтами (.session или .json)", "./")
-        if not session_folder:
+        folder = QFileDialog.getExistingDirectory(self, "Выберите папку с аккаунтами (.session + .json)", "./sessions")
+        if not folder:
             return
 
         self.account_list_widget.clear()
         self.accounts.clear()
 
-        def load_thread():
+        session_files = [f for f in os.listdir(folder) if f.endswith(".session")]
+        json_files = [f for f in os.listdir(folder) if f.endswith(".json")]
+
+        loaded = set()
+
+        # Загрузка .session аккаунтов
+        for file in session_files:
+            session_path = os.path.join(folder, file)
+            if os.path.getsize(session_path) > 0:
+                self.accounts.append({
+                    "type": "session",
+                    "path": session_path,
+                    "filename": file
+                })
+                self.account_list_widget.addItem(f"{file}: ✅ .session")
+                loaded.add(file.replace(".session", ""))
+
+        # Загрузка .json аккаунтов и авторизация
+        for json_file in json_files:
+            name = json_file.replace(".json", "")
+            if name in loaded:
+                continue  # уже загружен как .session
+
+            json_path = os.path.join(folder, json_file)
+            try:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception as e:
+                self.account_list_widget.addItem(f"{json_file}: ❌ Ошибка чтения JSON: {e}")
+                continue
+
+            phone = data.get("phone")
+            api_id = data.get("app_id") or API_ID
+            api_hash = data.get("app_hash") or API_HASH
+
+            if not phone:
+                self.account_list_widget.addItem(f"{json_file}: ❌ Нет номера телефона")
+                continue
+
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-
-            # === .session ===
-            session_files = [f for f in os.listdir(session_folder) if f.endswith(".session")]
-            for idx, file in enumerate(session_files):
-                full_path = os.path.join(session_folder, file)
-                proxy = self.proxies[idx] if idx < len(self.proxies) else None
-                try:
-                    status = loop.run_until_complete(check_account_status(full_path, proxy=proxy))
-                    account_name = os.path.basename(full_path)
-                    display_text = f"{account_name}: {status}"
-                    self.account_list_widget.addItem(display_text)
-                    self.accounts.append({
-                        "type": "session",
-                        "path": full_path
-                    })
-                    write_log("logs/accounts.log", display_text)
-                except Exception as e:
-                    error_text = f"{file}: ❌ Ошибка: {str(e)}"
-                    self.account_list_widget.addItem(error_text)
-                    write_log("logs/errors.log", error_text)
-
-            # === .json ===
-            json_files = [f for f in os.listdir(session_folder) if f.endswith(".json")]
-            for file in json_files:
-                try:
-                    with open(os.path.join(session_folder, file), "r", encoding="utf-8") as f:
-                        data = json.load(f)
-
-                    session = MemorySession()
-                    session.set_dc(data["dc_id"], "149.154.167.50", 443)
-                    session.auth_key = base64.b64decode(data["auth_key"])
-                    session._dc_id = data["dc_id"]
-
-                    client = TelegramClient(session, data["api_id"], data["api_hash"])
-                    loop.run_until_complete(client.connect())
-
-                    if not loop.run_until_complete(client.is_user_authorized()):
-                        raise Exception("Не авторизован")
-
-                    account_name = file.replace(".json", "")
-                    display_text = f"{account_name} (json): ✅ авторизован"
-                    self.account_list_widget.addItem(display_text)
-                    self.accounts.append({
-                        "type": "json",
-                        "session": session,
-                        "api_id": data["api_id"],
-                        "api_hash": data["api_hash"],
-                        "filename": file
-                    })
-                    write_log("logs/accounts.log", display_text)
-                    loop.run_until_complete(client.disconnect())
-
-                except Exception as e:
-                    error_text = f"{file}: ❌ Ошибка JSON: {str(e)}"
-                    self.account_list_widget.addItem(error_text)
-                    write_log("logs/errors.log", error_text)
-
-        threading.Thread(target=load_thread).start()
-
+            try:
+                loop.run_until_complete(self.authorize_json_account(phone, api_id, api_hash, folder))
+                self.accounts.append({
+                    "type": "json",
+                    "session": os.path.join(folder, phone),
+                    "api_id": api_id,
+                    "api_hash": api_hash,
+                    "filename": json_file
+                })
+                self.account_list_widget.addItem(f"{json_file}: ✅ Авторизован через JSON")
+            except Exception as e:
+                self.account_list_widget.addItem(f"{json_file}: ❌ Ошибка авторизации: {str(e)}")
+            finally:
+                loop.close()
 
 
 
@@ -404,13 +404,23 @@ class MainWindow(QMainWindow):
             lines = f.read().splitlines()
             self.proxies = []
 
-            for line in lines:
+            for idx, line in enumerate(lines, 1):
                 parts = line.strip().split(":")
-                if len(parts) >= 2:
-                    ip, port = parts[0], int(parts[1])
-                    user = parts[2] if len(parts) > 2 else None
-                    pwd = parts[3] if len(parts) > 3 else None
-                    self.proxies.append((ip, port, user, pwd))
+                if len(parts) < 2:
+                    print(f"⚠️ Строка {idx} — недостаточно данных: {line}")
+                    continue
+
+                ip = parts[0]
+                port = int(parts[1])
+                user = parts[2] if len(parts) > 2 else ""
+                pwd = parts[3] if len(parts) > 3 else ""
+                proxy_type = parts[4] if len(parts) > 4 else "http"
+
+                if proxy_type not in ("http", "socks5"):
+                    print(f"⚠️ Строка {idx} — неизвестный тип: {proxy_type}")
+                    continue
+
+                self.proxies.append((ip, port, user, pwd, proxy_type))
 
         print(f"✅ Загружено прокси: {len(self.proxies)}")
 
@@ -434,19 +444,33 @@ class MainWindow(QMainWindow):
         session_file = self.account_list_widget.item(0).text().split(":")[0]
         session_path = os.path.join("sessions", session_file)
 
+        threading.Thread(
+            target=self.run_check_recipients_thread,
+            args=(session_path, self.recipients),
+            daemon=True
+        ).start()
+
+
+    def run_check_recipients_thread(self, session_path, recipients):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.check_recipient_access(session_path, self.recipients))
+        loop.run_until_complete(self.check_recipient_access(session_path, recipients))
+        loop.close()
+
+
 
     async def check_recipient_access(self, session_path, usernames):
         try:
             client = TelegramClient(session_path.replace(".session", ""), API_ID, API_HASH)
-            await client.start()
+            await client.connect()
 
             for username in usernames:
+                if not await client.is_user_authorized():
+                    self.recipients_list_widget.addItem(f"❌ @{username} — не авторизован")
+                    continue
+
                 try:
                     user = await client.get_entity(username)
-                    await client.send_message(user.id, "test")
                     self.recipients_list_widget.addItem(f"✅ @{username} — доступно")
                 except Exception as e:
                     self.recipients_list_widget.addItem(f"❌ @{username} — {str(e)}")
@@ -471,6 +495,21 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def run_sending(self):
+        self.send_log_widget.append("🚀 Запуск рассылки...")
+        self.stop_flag = False  # если нужен флаг остановки
+
+        threading.Thread(
+            target=self._run_sending_thread,
+            daemon=True
+        ).start()
+
+    def _run_sending_thread(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self._run_sending_async())
+        loop.close()
+
+    async def _run_sending_async(self):
         message = self.message_edit.toPlainText()
         min_delay = self.min_delay.value()
         max_delay = self.max_delay.value()
@@ -481,32 +520,17 @@ class MainWindow(QMainWindow):
             if self.stop_flag:
                 break
 
+            session_name = os.path.basename(acc["path"]) if acc["type"] == "session" else acc["filename"]
+
             try:
                 if acc["type"] == "session":
                     client = TelegramClient(acc["path"].replace(".session", ""), API_ID, API_HASH)
-                    session_name = os.path.basename(acc["path"])
-                else:  # JSON
-                    client = TelegramClient(
-                        acc["session"],
-                        acc["api_id"],
-                        acc["api_hash"]
-                    )
-                    session_name = acc["filename"]
+                elif acc["type"] == "json":
+                    client = TelegramClient(acc["session"], acc["api_id"], acc["api_hash"])
+                else:
+                    raise Exception(f"Неизвестный тип аккаунта: {acc}")
 
-                client.connect()
-
-                if not client.is_user_authorized():
-                    try:
-                        client.start()
-                    except SessionPasswordNeededError:
-                        pwd, ok = QInputDialog.getText(
-                            self,
-                            "2FA Защита",
-                            f"Введите 2FA-пароль для аккаунта:\n{session_name}"
-                        )
-                        if not ok or not pwd:
-                            raise Exception("2FA-пароль не введён.")
-                        client.sign_in(password=pwd)
+                await client.start()
 
                 send_limit = random.randint(limit_min, limit_max)
                 targets = random.sample(self.recipients, min(send_limit, len(self.recipients)))
@@ -515,34 +539,48 @@ class MainWindow(QMainWindow):
                     if self.stop_flag:
                         break
                     try:
-                        user = client.get_entity(username)
+                        user = await client.get_entity(username)
 
                         if self.media_path:
                             media_type = self.media_type.currentText() if self.media_type else "Фото/видео"
-
                             if "Голос" in media_type:
-                                client.send_file(user, self.media_path, voice_note=True)
+                                await client.send_file(user, self.media_path, voice_note=True)
                             elif "Кружок" in media_type:
-                                client.send_file(user, self.media_path, video_note=True)
+                                await client.send_file(user, self.media_path, video_note=True)
                             else:
-                                client.send_file(user, self.media_path, caption=message)
+                                await client.send_file(user, self.media_path, caption=message)
                         else:
-                            client.send_message(user, message)
+                            await client.send_message(user, message)
 
                         write_log("logs/send.log", f"{session_name} → @{username}")
                         append_report(session_name, username, True, "OK")
-                        time.sleep(random.uniform(min_delay, max_delay))
+                        self.send_log_widget.append(f"✅ {session_name} → @{username}")
+
+                        await asyncio.sleep(random.uniform(min_delay, max_delay))
+
                     except Exception as e:
                         write_log("logs/errors.log", f"{session_name} → @{username}: {str(e)}")
                         append_report(session_name, username, False, str(e))
+                        self.send_log_widget.append(f"❌ {session_name} → @{username}: {str(e)}")
 
-                client.disconnect()
+                await client.disconnect()
 
+            except SessionPasswordNeededError:
+                pwd, ok = QInputDialog.getText(
+                    self, "2FA Защита", f"Введите 2FA-пароль для аккаунта:\n{session_name}"
+                )
+                if ok and pwd:
+                    try:
+                        await client.sign_in(password=pwd)
+                    except Exception as e:
+                        write_log("logs/errors.log", f"{session_name}: ошибка входа с 2FA: {str(e)}")
+                else:
+                    write_log("logs/errors.log", f"{session_name}: 2FA-пароль не введён.")
             except Exception as e:
                 write_log("logs/errors.log", f"Ошибка аккаунта {session_name}: {str(e)}")
+                self.send_log_widget.append(f"🔥 Ошибка аккаунта {session_name}: {str(e)}")
 
-
-
+        self.send_log_widget.append("📬 Рассылка завершена.")
 
 
     def recheck_accounts(self):
@@ -555,18 +593,28 @@ class MainWindow(QMainWindow):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        for idx, path in enumerate(self.accounts):
+        for idx, acc in enumerate(self.accounts):
+            # Получаем путь сессии
+            if isinstance(acc, dict):
+                session_path = acc.get("path") if acc["type"] == "session" else acc.get("session")
+                account_name = acc.get("filename") or os.path.basename(session_path)
+            else:
+                # старый формат (строка)
+                session_path = acc
+                account_name = os.path.basename(session_path)
+
+            # Подставляем прокси
             proxy = self.proxies[idx] if idx < len(self.proxies) else None
+
             try:
-                status = loop.run_until_complete(check_account_status(path, proxy=proxy))
-                account_name = os.path.basename(path)
-                display_text = f"{account_name}: {status}"
-                self.account_list_widget.addItem(display_text)
-                write_log("logs/accounts.log", display_text)
+                status_code, display_text = loop.run_until_complete(check_account_status(session_path, proxy=proxy))
+                self.account_list_widget.addItem(f"{display_text}")
+                write_log("logs/accounts.log", f"{account_name}: {display_text}")
             except Exception as e:
-                error_text = f"{os.path.basename(path)}: ❌ Ошибка: {str(e)}"
+                error_text = f"{account_name}: ❌ Ошибка: {str(e)}"
                 self.account_list_widget.addItem(error_text)
                 write_log("logs/errors.log", error_text)
+
 
 
     def export_report(self):

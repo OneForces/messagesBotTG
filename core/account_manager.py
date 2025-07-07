@@ -6,50 +6,50 @@ from telethon import TelegramClient, errors
 API_ID = 12345678  # ← замени на свой
 API_HASH = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'  # ← замени на свой
 
-
 async def check_account_status(session_path, proxy=None):
     try:
-        # Настройка прокси
         proxy_config = None
         if proxy:
-            ip, port, user, pwd = proxy
-            proxy_config = ('socks5', ip, port, True, user, pwd) if user else ('socks5', ip, port)
+            ip, port, user, pwd, ptype = proxy
+            if ptype == "socks5":
+                proxy_config = ('socks5', ip, port, True, user, pwd) if user else ('socks5', ip, port)
 
-        # Запуск клиента
         client = TelegramClient(session_path.replace('.session', ''), API_ID, API_HASH, proxy=proxy_config)
         await client.connect()
 
-        # Проверка авторизации
         if not await client.is_user_authorized():
-            return '⛔ Не авторизован'
+            await client.disconnect()
+            return 'not_authorized', '⛔ Не авторизован'
 
         me = await client.get_me()
-        result = f"{me.first_name or ''} ({me.username or me.phone})"
+        result_text = f"{me.first_name or ''} ({me.username or me.phone})"
 
-        # Проверка статуса у @SpamBot
         try:
             entity = await client.get_entity("SpamBot")
             await client.send_message(entity, "/start")
-            await asyncio.sleep(2)  # ждём ответа
+            await asyncio.sleep(2)
 
             messages = await client.get_messages(entity, limit=1)
             text = messages[0].message.lower()
 
             if "ограничения отсутствуют" in text:
-                result += " — ✅ Активный"
+                await client.disconnect()
+                return 'active', f"{result_text} — ✅ Активный"
             elif "временные ограничения" in text:
-                result += " — ⚠️ Временный бан"
+                await client.disconnect()
+                return 'temp_ban', f"{result_text} — ⚠️ Временный бан"
             elif "вы больше не можете использовать telegram" in text:
-                result += " — ⛔ Перманентный бан"
+                await client.disconnect()
+                return 'banned', f"{result_text} — ⛔ Перманентный бан"
             else:
-                result += " — ❓ Неизвестный статус"
-        except Exception as e:
-            result += f" — ⚠️ Ошибка при проверке: {str(e)}"
+                await client.disconnect()
+                return 'unknown', f"{result_text} — ❓ Неизвестный статус"
 
-        await client.disconnect()
-        return result
+        except Exception as e:
+            await client.disconnect()
+            return 'error', f"{result_text} — ⚠️ Ошибка при проверке: {str(e)}"
 
     except errors.UserDeactivatedBanError:
-        return "⛔ Аккаунт заблокирован"
+        return 'banned', "⛔ Аккаунт заблокирован"
     except Exception as e:
-        return f"❌ Ошибка: {str(e)}"
+        return 'error', f"❌ Ошибка: {str(e)}"
